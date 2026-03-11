@@ -1,0 +1,34 @@
+# Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+#
+# Copyright (c) 2026 Chengdu Changshu Robot Co., Ltd.
+# https://www.openarmx.com
+#
+# This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike
+# 4.0 International License (CC BY-NC-SA 4.0).
+#
+# To view a copy of this license, visit:
+# http://creativecommons.org/licenses/by-nc-sa/4.0/
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "setuptools_scm>=8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lerobot_teleoperator_openarmx_leader_ros2"
+version = "0.0.1"
+description = "LeRobot teleoperator plugin for OpenArmX that consumes ROS 2 VR topics and outputs joint position actions."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "lerobot",
+  "rclpy",
+]
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lerobot_teleoperator_openarmx_leader_ros2*"]

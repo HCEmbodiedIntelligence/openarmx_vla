@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<!--
+   Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+
+   Copyright (c) 2026 Chengdu Changshu Robot Co., Ltd.
+   https://www.openarmx.com
+
+   This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike
+   4.0 International License (CC BY-NC-SA 4.0).
+
+   To view a copy of this license, visit:
+   http://creativecommons.org/licenses/by-nc-sa/4.0/
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+-->
+<package format="3">
+  <name>openarmx_lerobot</name>
+  <version>0.0.1</version>
+  <description>Combined launch for OpenArmX bringup, pico pose bridge, and teleop by Pico.</description>
+  <maintainer email="user@example.com">openarmx</maintainer>
+  <license>CC-BY-NC-SA-4.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>launch</depend>
+  <depend>launch_ros</depend>
+  <depend>ament_index_python</depend>
+
+  <exec_depend>openarmx_bringup</exec_depend>
+  <exec_depend>openarmx_teleop_bridge_vr_pico</exec_depend>
+  <exec_depend>openarmx_teleop_vr_pico</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
