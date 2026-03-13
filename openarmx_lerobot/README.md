@@ -49,7 +49,7 @@ sudo ip link set can1 up
 cd <your_workspace>
 source install/setup.bash
 
-ros2 launch openarm_bringup openarm.bimanual.launch.py \
+ros2 launch openarmx_bringup openarmx.bimanual.launch.py \
   control_mode:=mit \
   robot_controller:=forward_position_controller \
   use_fake_hardware:=false
@@ -60,7 +60,7 @@ ros2 launch openarm_bringup openarm.bimanual.launch.py \
 ```bash
 cd <your_workspace>
 source install/setup.bash
-ros2 run pico_pose_bridge pico_pose_bridge_node
+ros2 run openarmx_teleop_bridge_vr_pico openarmx_teleop_bridge_vr_pico_node
 ```
 
 4. Terminal 3: Start the VR teleoperation node
@@ -68,7 +68,7 @@ ros2 run pico_pose_bridge pico_pose_bridge_node
 ```bash
 cd ~/openarmx_ws/
 source install/setup.bash
-ros2 launch openarm_teleop_by_pico teleop_by_pico.launch.py
+ros2 launch openarmx_teleop_vr_pico teleop_vr_pico.launch.py
 ```
 
 5. Terminal 4: Start camera publisher nodes
