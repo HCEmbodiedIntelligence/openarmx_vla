@@ -35,11 +35,20 @@ RealSense 相机 ROS2 发布节点启动文件。
     - height: 图像高度 (默认: 240)
     - fps: 帧率 (默认: 15)
     - cam_left_serial: 左手相机序列号 (默认: 218622270388)
-    - cam_left_type: 左手相机类型 D405/D435 (默认: D405)
+    - cam_left_type: 左手相机类型 D405/D435/D435I (默认: D405)
     - cam_right_serial: 右手相机序列号 (默认: 218622274446)
-    - cam_right_type: 右手相机类型 D405/D435 (默认: D405)
+    - cam_right_type: 右手相机类型 D405/D435/D435I (默认: D405)
     - cam_head_serial: 头部相机序列号 (默认: 335522070220)
-    - cam_head_type: 头部相机类型 D405/D435 (默认: D435)
+    - cam_head_type: 头部相机类型 D405/D435/D435I (默认: D435)
+    - cam_*_color_auto_exposure: 颜色自动曝光，支持 true/false/unset
+    - cam_*_color_exposure: 颜色手动曝光，范围 1..10000
+    - cam_*_color_gain: 颜色手动增益，范围 0..128
+    - cam_*_color_auto_white_balance: 颜色自动白平衡，支持 true/false/unset
+    - cam_*_color_white_balance: 颜色手动白平衡，范围 2800..6500
+    - cam_*_color_brightness: 亮度，范围 -64..64
+    - cam_*_color_contrast: 对比度，范围 0..100
+    - cam_*_color_saturation: 饱和度，范围 0..100
+    - cam_*_color_sharpness: 锐度，范围 0..100
 
 使用方法:
     # 默认配置启动
@@ -52,6 +61,17 @@ RealSense 相机 ROS2 发布节点启动文件。
     ros2 launch openarmx_lerobot camera_publisher.launch.py \\
         cam_left_serial:=123456789012 cam_left_type:=D435 \\
         cam_head_serial:=987654321098 cam_head_type:=D405
+
+    # 单独调左手相机颜色曝光/增益
+    ros2 launch openarmx_lerobot camera_publisher.launch.py \\
+        cam_left_color_auto_exposure:=false \\
+        cam_left_color_exposure:=400 \\
+        cam_left_color_gain:=32
+
+    # 关闭头部相机自动白平衡并设置手动白平衡
+    ros2 launch openarmx_lerobot camera_publisher.launch.py \\
+        cam_head_color_auto_white_balance:=false \\
+        cam_head_color_white_balance:=4600
 
     # 确保所有设备使用相同的 ROS_DOMAIN_ID
     export ROS_DOMAIN_ID=42
@@ -92,6 +112,197 @@ D435_SUPPORTED_PROFILES = {
 }
 
 
+# ============================================================================
+# 颜色控制参数
+# ============================================================================
+
+UNSET = "unset"
+SUPPORTED_CAMERA_TYPES = {"D405", "D435", "D435I"}
+TRUTHY_VALUES = {"1", "true", "yes", "on"}
+FALSY_VALUES = {"0", "false", "no", "off"}
+CAMERA_CONTROL_ARGUMENTS = {
+    "color_auto_exposure": {
+        "type": "bool",
+        "param": "rgb_camera.enable_auto_exposure",
+        "description": "颜色自动曝光，true/false/unset",
+    },
+    "color_exposure": {
+        "type": "int",
+        "param": "rgb_camera.exposure",
+        "min": 1,
+        "max": 10000,
+        "description": "颜色手动曝光，范围 1..10000，unset 表示不设置",
+    },
+    "color_gain": {
+        "type": "int",
+        "param": "rgb_camera.gain",
+        "min": 0,
+        "max": 128,
+        "description": "颜色手动增益，范围 0..128，unset 表示不设置",
+    },
+    "color_auto_white_balance": {
+        "type": "bool",
+        "param": "rgb_camera.enable_auto_white_balance",
+        "description": "颜色自动白平衡，true/false/unset",
+    },
+    "color_white_balance": {
+        "type": "int",
+        "param": "rgb_camera.white_balance",
+        "min": 2800,
+        "max": 6500,
+        "description": "颜色手动白平衡，范围 2800..6500，unset 表示不设置",
+    },
+    "color_brightness": {
+        "type": "int",
+        "param": "rgb_camera.brightness",
+        "min": -64,
+        "max": 64,
+        "description": "颜色亮度，范围 -64..64，unset 表示不设置",
+    },
+    "color_contrast": {
+        "type": "int",
+        "param": "rgb_camera.contrast",
+        "min": 0,
+        "max": 100,
+        "description": "颜色对比度，范围 0..100，unset 表示不设置",
+    },
+    "color_saturation": {
+        "type": "int",
+        "param": "rgb_camera.saturation",
+        "min": 0,
+        "max": 100,
+        "description": "颜色饱和度，范围 0..100，unset 表示不设置",
+    },
+    "color_sharpness": {
+        "type": "int",
+        "param": "rgb_camera.sharpness",
+        "min": 0,
+        "max": 100,
+        "description": "颜色锐度，范围 0..100，unset 表示不设置",
+    },
+}
+
+
+def normalize_camera_type(cam_type: str) -> str:
+    return cam_type.strip().upper()
+
+
+def parse_optional_bool(raw_value: str, arg_name: str) -> bool | None:
+    value = raw_value.strip().lower()
+    if value in ("", UNSET):
+        return None
+    if value in TRUTHY_VALUES:
+        return True
+    if value in FALSY_VALUES:
+        return False
+    raise RuntimeError(
+        f"参数 {arg_name} 必须是 true/false/{UNSET}，当前值: {raw_value}"
+    )
+
+
+def parse_optional_int(raw_value: str, arg_name: str) -> int | None:
+    value = raw_value.strip().lower()
+    if value in ("", UNSET):
+        return None
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"参数 {arg_name} 必须是整数或 {UNSET}，当前值: {raw_value}") from exc
+
+
+def validate_integer_range(arg_name: str, value: int | None, min_value: int, max_value: int) -> None:
+    if value is None:
+        return
+    if not (min_value <= value <= max_value):
+        raise RuntimeError(
+            f"参数 {arg_name} 超出范围: {value}，允许范围: {min_value}..{max_value}"
+        )
+
+
+def parse_camera_controls(context, camera_name: str, cam_type: str) -> tuple[dict[str, object], list[str]]:
+    """解析并校验每路相机的颜色控制参数。
+
+    说明:
+        - 这里按照 realsense2_camera 的公开参数命名
+        - D405: 颜色流来自深度传感器，参数需映射到 depth_module.* (如 depth_module.exposure)
+        - D435/D435I: 独立 RGB 传感器，参数映射到 rgb_camera.*
+    """
+    cam_type_upper = normalize_camera_type(cam_type)
+    if cam_type_upper not in SUPPORTED_CAMERA_TYPES:
+        raise RuntimeError(f"{camera_name} 不支持的相机类型: {cam_type}")
+
+    # 根据相机类型确定参数前缀
+    # D405 没有独立的 rgb_camera，其颜色控制实际上是控制 depth_module
+    if cam_type_upper == "D405":
+        param_prefix = "depth_module"
+        src_prefix = "rgb_camera"
+    else:
+        param_prefix = "rgb_camera"
+        src_prefix = "rgb_camera"
+
+    controls: dict[str, object] = {}
+    applied_logs: list[str] = []
+
+    for option_name, spec in CAMERA_CONTROL_ARGUMENTS.items():
+        arg_name = f"{camera_name}_{option_name}"
+        raw_value = LaunchConfiguration(arg_name).perform(context)
+
+        if spec["type"] == "bool":
+            parsed_value = parse_optional_bool(raw_value, arg_name)
+        else:
+            parsed_value = parse_optional_int(raw_value, arg_name)
+            validate_integer_range(arg_name, parsed_value, spec["min"], spec["max"])
+
+        if parsed_value is not None:
+            # 替换参数前缀
+            param_name = spec["param"].replace(src_prefix, param_prefix)
+            controls[param_name] = parsed_value
+            applied_logs.append(f"{option_name}={parsed_value}")
+
+    # 校验逻辑也需要使用正确的前缀
+    color_auto_exposure = controls.get(f"{param_prefix}.enable_auto_exposure")
+    color_exposure = controls.get(f"{param_prefix}.exposure")
+    color_gain = controls.get(f"{param_prefix}.gain")
+    color_auto_white_balance = controls.get(f"{param_prefix}.enable_auto_white_balance")
+    color_white_balance = controls.get(f"{param_prefix}.white_balance")
+
+    if color_auto_exposure is True:
+        if color_exposure is not None:
+            controls.pop(f"{param_prefix}.exposure", None)
+            applied_logs.append("color_exposure=ignored(auto)")
+        if color_gain is not None:
+            controls.pop(f"{param_prefix}.gain", None)
+            applied_logs.append("color_gain=ignored(auto)")
+    if color_auto_white_balance is True and color_white_balance is not None:
+        raise RuntimeError(
+            f"{camera_name} 同时设置了颜色自动白平衡=true 与手动白平衡，请改为 false 或移除手动值。"
+        )
+
+    if color_auto_exposure is None and (color_exposure is not None or color_gain is not None):
+        controls[f"{param_prefix}.enable_auto_exposure"] = False
+        applied_logs.append("color_auto_exposure=False(auto)")
+
+    if color_auto_white_balance is None and color_white_balance is not None:
+        controls[f"{param_prefix}.enable_auto_white_balance"] = False
+        applied_logs.append("color_auto_white_balance=False(auto)")
+
+    return controls, applied_logs
+
+
+def create_camera_control_arguments() -> list[DeclareLaunchArgument]:
+    arguments: list[DeclareLaunchArgument] = []
+    for camera_name in ("cam_left", "cam_right", "cam_head"):
+        for option_name, spec in CAMERA_CONTROL_ARGUMENTS.items():
+            arguments.append(
+                DeclareLaunchArgument(
+                    f"{camera_name}_{option_name}",
+                    default_value=UNSET,
+                    description=f"{camera_name} {spec['description']}",
+                )
+            )
+    return arguments
+
+
 def validate_profile(cam_type: str, width: int, height: int, fps: int) -> tuple[bool, str]:
     """
     验证相机配置是否支持。
@@ -112,7 +323,7 @@ def validate_profile(cam_type: str, width: int, height: int, fps: int) -> tuple[
     elif cam_type_upper in ("D435", "D435I"):
         profiles = D435_SUPPORTED_PROFILES
     else:
-        return False, f"不支持的相机类型: {cam_type}，仅支持 D405 和 D435"
+        return False, f"不支持的相机类型: {cam_type}，仅支持 D405、D435 和 D435I"
 
     resolution = (width, height)
 
@@ -133,7 +344,14 @@ def validate_profile(cam_type: str, width: int, height: int, fps: int) -> tuple[
     return True, f"{cam_type_upper} 配置有效: {width}x{height}@{fps}fps"
 
 
-def create_camera_node(context, name: str, serial: str, cam_type: str, profile: str):
+def create_camera_node(
+    context,
+    name: str,
+    serial: str,
+    cam_type: str,
+    profile: str,
+    extra_camera_params: dict[str, object] | None = None,
+):
     """
     创建 RealSense 相机节点，并统一话题名称。
 
@@ -156,15 +374,16 @@ def create_camera_node(context, name: str, serial: str, cam_type: str, profile: 
     serial_str = f"_{serial_value}"
 
     # 根据相机类型确定原始话题名称和参数配置
-    if cam_type_value.upper() == "D405":
+    if normalize_camera_type(cam_type_value) == "D405":
         # D405: RGB 集成在深度模块，原始话题是 image_rect_raw
+        # D405 的 RGB 和 深度是物理同轴的，不需要软件对齐，原始深度图即已对齐
         camera_params = {
             "serial_no": serial_str,
-            "depth_module.depth_profile": profile_value,
             "depth_module.color_profile": profile_value,
+            "depth_module.depth_profile": profile_value,
             "enable_color": True,
             "enable_depth": True,
-            "align_depth.enable": True,
+            "align_depth.enable": False, # D405 不需要软件对齐
             "enable_infra1": False,
             "enable_infra2": False,
             "enable_gyro": False,
@@ -173,6 +392,8 @@ def create_camera_node(context, name: str, serial: str, cam_type: str, profile: 
         }
         # D405 的原始 RGB 话题是 color/image_rect_raw
         original_color_topic = f"/{name}/{name}/color/image_rect_raw"
+        # D405 直接使用原始深度图（已物理对齐）
+        original_depth_topic = f"/{name}/{name}/depth/image_rect_raw"
     else:
         # D435/D435i: 独立 RGB 模块，原始话题是 image_raw
         camera_params = {
@@ -190,9 +411,13 @@ def create_camera_node(context, name: str, serial: str, cam_type: str, profile: 
         }
         # D435 的原始 RGB 话题是 color/image_raw
         original_color_topic = f"/{name}/{name}/color/image_raw"
+        # D435 需要使用对齐后的深度图
+        original_depth_topic = f"/{name}/{name}/aligned_depth_to_color/image_raw"
 
-    # 深度话题两种相机都相同
-    original_depth_topic = f"/{name}/{name}/aligned_depth_to_color/image_raw"
+    if extra_camera_params:
+        camera_params.update(extra_camera_params)
+
+    # 统一后的话题名称
 
     # 统一后的话题名称
     unified_color_topic = f"/{name}/color/image"
@@ -234,9 +459,9 @@ def launch_setup(context, *args, **kwargs):
     cam_head_type = LaunchConfiguration('cam_head_type')
 
     # 获取相机类型字符串用于校验
-    cam_left_type_str = cam_left_type.perform(context)
-    cam_right_type_str = cam_right_type.perform(context)
-    cam_head_type_str = cam_head_type.perform(context)
+    cam_left_type_str = normalize_camera_type(cam_left_type.perform(context))
+    cam_right_type_str = normalize_camera_type(cam_right_type.perform(context))
+    cam_head_type_str = normalize_camera_type(cam_head_type.perform(context))
 
     # 校验所有相机配置
     cameras_to_validate = [
@@ -260,6 +485,19 @@ def launch_setup(context, *args, **kwargs):
                 LogInfo(msg=f"[INFO] {cam_name}: {message}")
             )
 
+    # 解析每路相机的颜色控制参数
+    cam_left_controls, cam_left_control_logs = parse_camera_controls(context, "cam_left", cam_left_type_str)
+    cam_right_controls, cam_right_control_logs = parse_camera_controls(context, "cam_right", cam_right_type_str)
+    cam_head_controls, cam_head_control_logs = parse_camera_controls(context, "cam_head", cam_head_type_str)
+
+    for cam_name, applied_logs in (
+        ("cam_left", cam_left_control_logs),
+        ("cam_right", cam_right_control_logs),
+        ("cam_head", cam_head_control_logs),
+    ):
+        if applied_logs:
+            log_actions.append(LogInfo(msg=f"[INFO] {cam_name} 颜色参数: {', '.join(applied_logs)}"))
+
     if has_error:
         # 打印支持的配置帮助信息
         log_actions.append(LogInfo(msg="\n" + "=" * 60))
@@ -277,13 +515,13 @@ def launch_setup(context, *args, **kwargs):
 
     # 创建相机节点
     cam_left_node = create_camera_node(
-        context, "cam_left", cam_left_serial, cam_left_type, profile
+        context, "cam_left", cam_left_serial, cam_left_type, profile, cam_left_controls
     )
     cam_right_node = create_camera_node(
-        context, "cam_right", cam_right_serial, cam_right_type, profile
+        context, "cam_right", cam_right_serial, cam_right_type, profile, cam_right_controls
     )
     cam_head_node = create_camera_node(
-        context, "cam_head", cam_head_serial, cam_head_type, profile
+        context, "cam_head", cam_head_serial, cam_head_type, profile, cam_head_controls
     )
 
     return log_actions + [cam_left_node, cam_right_node, cam_head_node]
@@ -317,7 +555,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'cam_left_type',
             default_value='D405',
-            description='左手相机类型 (D405 或 D435)'
+            description='左手相机类型 (D405、D435 或 D435I)'
         ),
 
         # 右手相机参数
@@ -329,7 +567,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'cam_right_type',
             default_value='D405',
-            description='右手相机类型 (D405 或 D435)'
+            description='右手相机类型 (D405、D435 或 D435I)'
         ),
 
         # 头部相机参数
@@ -341,9 +579,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'cam_head_type',
             default_value='D435',
-            description='头部相机类型 (D405 或 D435)'
+            description='头部相机类型 (D405、D435 或 D435I)'
         ),
 
+    ] + create_camera_control_arguments() + [
         # 使用 OpaqueFunction 动态创建节点
         OpaqueFunction(function=launch_setup),
     ])
