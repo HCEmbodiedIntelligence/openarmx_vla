@@ -34,11 +34,11 @@ RealSense 相机 ROS2 发布节点启动文件。
     - width: 图像宽度 (默认: 424)
     - height: 图像高度 (默认: 240)
     - fps: 帧率 (默认: 15)
-    - cam_left_serial: 左手相机序列号 (默认: 218622270388)
+    - cam_left_serial: 左手相机序列号 (默认: 260322273516)
     - cam_left_type: 左手相机类型 D405/D435/D435I (默认: D405)
-    - cam_right_serial: 右手相机序列号 (默认: 218622274446)
+    - cam_right_serial: 右手相机序列号 (默认: 260322276127)
     - cam_right_type: 右手相机类型 D405/D435/D435I (默认: D405)
-    - cam_head_serial: 头部相机序列号 (默认: 335522070220)
+    - cam_head_serial: 头部相机序列号 (默认: 261722074553)
     - cam_head_type: 头部相机类型 D405/D435/D435I (默认: D435)
     - cam_*_color_auto_exposure: 颜色自动曝光，支持 true/false/unset
     - cam_*_color_exposure: 颜色手动曝光，范围 1..10000
@@ -390,10 +390,14 @@ def create_camera_node(
             "enable_accel": False,
             "pointcloud.enable": False,
         }
-        # D405 的原始 RGB 话题是 color/image_rect_raw
-        original_color_topic = f"/{name}/{name}/color/image_rect_raw"
-        # D405 直接使用原始深度图（已物理对齐）
-        original_depth_topic = f"/{name}/{name}/depth/image_rect_raw"
+        original_color_topics = [
+            f"/{name}/{name}/color/image_raw",
+            f"/{name}/{name}/color/image_rect_raw",
+        ]
+        original_depth_topics = [
+            f"/{name}/{name}/depth/image_raw",
+            f"/{name}/{name}/depth/image_rect_raw",
+        ]
     else:
         # D435/D435i: 独立 RGB 模块，原始话题是 image_raw
         camera_params = {
@@ -410,9 +414,9 @@ def create_camera_node(
             "pointcloud.enable": False,
         }
         # D435 的原始 RGB 话题是 color/image_raw
-        original_color_topic = f"/{name}/{name}/color/image_raw"
+        original_color_topics = [f"/{name}/{name}/color/image_raw"]
         # D435 需要使用对齐后的深度图
-        original_depth_topic = f"/{name}/{name}/aligned_depth_to_color/image_raw"
+        original_depth_topics = [f"/{name}/{name}/aligned_depth_to_color/image_raw"]
 
     if extra_camera_params:
         camera_params.update(extra_camera_params)
@@ -424,9 +428,8 @@ def create_camera_node(
     unified_depth_topic = f"/{name}/depth/image"
 
     # 设置话题重映射
-    remappings = [
-        (original_color_topic, unified_color_topic),
-        (original_depth_topic, unified_depth_topic),
+    remappings = [(topic, unified_color_topic) for topic in original_color_topics] + [
+        (topic, unified_depth_topic) for topic in original_depth_topics
     ]
 
     return Node(
@@ -549,7 +552,7 @@ def generate_launch_description():
         # 左手相机参数
         DeclareLaunchArgument(
             'cam_left_serial',
-            default_value='218622270388',
+            default_value='260322273516',
             description='左手相机序列号'
         ),
         DeclareLaunchArgument(
@@ -561,7 +564,7 @@ def generate_launch_description():
         # 右手相机参数
         DeclareLaunchArgument(
             'cam_right_serial',
-            default_value='218622274446',
+            default_value='260322276127',
             description='右手相机序列号'
         ),
         DeclareLaunchArgument(
@@ -573,7 +576,7 @@ def generate_launch_description():
         # 头部相机参数
         DeclareLaunchArgument(
             'cam_head_serial',
-            default_value='335522070220',
+            default_value='261722074553',
             description='头部相机序列号'
         ),
         DeclareLaunchArgument(

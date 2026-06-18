@@ -13,10 +13,14 @@
 
 from __future__ import annotations
 
+import bisect
 import logging
+import os
 import time
 from functools import cached_property
 from typing import Any
+
+import yaml
 
 from lerobot.cameras.camera import Camera
 from lerobot.robots import Robot
@@ -73,6 +77,8 @@ class OpenArmXRos2(Robot):
 
         self._all_joint_names = self.config.ros2.left_joint_names + self.config.ros2.right_joint_names
 
+        self._calibrated=False
+
     @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
         motor_state_ft = {f"{j}.pos": float for j in self._all_joint_names}
@@ -107,15 +113,20 @@ class OpenArmXRos2(Robot):
                 break
             time.sleep(0.05)
 
+        if calibrate:
+            self.calibrate()
+
     @property
     def is_calibrated(self) -> bool:
-        return True
+        return self._calibrated
 
     def calibrate(self) -> None:
-        return  # handled externally
+        self._replay_teach_action(self.config.init_pos_path, joint_thr=0.174)
+        self._calibrated=True
 
     def configure(self) -> None:
         return  # handled externally
+
 
     def get_observation(self) -> dict[str, Any]:
         if not self.is_connected:
@@ -173,7 +184,134 @@ class OpenArmXRos2(Robot):
     def disconnect(self) -> None:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
-
+        
+        self._replay_teach_action(self.config.return_pos_path, joint_thr=0.348)
         for cam in self.cameras.values():
             cam.disconnect()
         self.ros2.disconnect()
+        self._calibrated=False
+
+    def _replay_teach_action(self,yaml_path,joint_thr=None):
+        """Load demo.yaml trajectory and slowly move robot to the initial position.
+
+        Args:
+            yaml_path: Path to the demo YAML file containing the trajectory.
+            joint_thr: If set, compare current joint positions with the first
+                trajectory point. When any joint difference exceeds this
+                threshold, the robot will not move and a ValueError is raised.
+        """
+        if yaml_path is None:
+            return  # No demo file configured, skip calibration.
+
+        if not os.path.isfile(yaml_path):
+            logger.warning(f"Demo YAML not found: {yaml_path}, skipping calibration.")
+            return
+
+
+        with open(yaml_path, "r") as f:
+            data = yaml.safe_load(f)
+
+        yaml_joint_names: list[str] = data["joint_names"]
+        points: list[dict] = data["points"]
+
+        # Build mapping: joint name -> index in yaml positions vector
+        name_to_yaml_idx = {name: i for i, name in enumerate(yaml_joint_names)}
+
+        # Verify all configured joints exist in the yaml
+        left_names = self.config.ros2.left_joint_names
+        right_names = self.config.ros2.right_joint_names
+        all_cfg_names = left_names + right_names
+        missing = [j for j in all_cfg_names if j not in name_to_yaml_idx]
+        if missing:
+            raise ValueError(f"Joints in config not found in demo YAML: {missing}")
+
+        # Parse time_from_start (handle both float and {secs, nsecs} dict)
+        def _parse_time(t):
+            if isinstance(t, dict):
+                return float(t.get("secs", 0)) + float(t.get("nsecs", 0)) * 1e-9
+            return float(t)
+
+        times = [_parse_time(p["time_from_start"]) for p in points]
+        all_positions = [p["positions"] for p in points]
+
+        # Convert each yaml point to left/right command vectors (in config order)
+        left_goals: list[list[float]] = []
+        right_goals: list[list[float]] = []
+        for pos in all_positions:
+            pos_map = {yaml_joint_names[i]: float(pos[i]) for i in range(len(yaml_joint_names))}
+            left_goals.append([pos_map[j] for j in left_names])
+            right_goals.append([pos_map[j] for j in right_names])
+
+        # --- Joint threshold check: compare current pose with first trajectory point ---
+        if joint_thr is not None:
+            current_positions = self.ros2.get_joint_positions(self._all_joint_names)
+            if current_positions is None:
+                raise ValueError("Joint state is not available yet.")
+
+            first_goals = left_goals[0] + right_goals[0]  # ordered as all_joint_names
+            exceeded: list[tuple[int, str, float]] = []
+            for idx, (name, first_val) in enumerate(zip(self._all_joint_names, first_goals)):
+                diff = abs(current_positions[name] - first_val)
+                if diff > joint_thr:
+                    exceeded.append((idx, name, diff))
+
+            if exceeded:
+                for idx, name, diff in exceeded:
+                    logger.warning(
+                        f"Joint #{idx} '{name}' diff={diff:.4f} exceeds threshold {joint_thr}"
+                    )
+                max_item = max(exceeded, key=lambda x: x[2])
+                raise ValueError(
+                    f"Joint position difference too large: joint #{max_item[0]} '{max_item[1]}' "
+                    f"diff={max_item[2]:.4f} > threshold={joint_thr}. "
+                    f"Total {len(exceeded)} joint(s) exceeded. Robot will not move."
+                )
+
+        # Slowly execute the trajectory via linear interpolation
+        speed_scale = self.config.calib_speed_scale
+        dt = 0.05  # 50 ms control loop period
+        total_duration = times[-1] / speed_scale
+        logger.info(
+            f"Calibration: executing demo trajectory '{yaml_path}' "
+            f"({len(points)} points, {total_duration:.1f}s at speed_scale={speed_scale})"
+        )
+
+        t0 = time.time()
+        while True:
+            elapsed = time.time() - t0
+            traj_time = elapsed * speed_scale
+
+            if traj_time >= times[-1]:
+                break
+
+            # Locate segment [i, i+1] via binary search
+            i = bisect.bisect_right(times, traj_time) - 1
+            if i < 0:
+                i = 0
+            if i >= len(times) - 1:
+                i = len(times) - 2
+
+            t_start = times[i]
+            t_end = times[i + 1]
+            alpha = (traj_time - t_start) / (t_end - t_start) if (t_end - t_start) > 1e-9 else 0.0
+            # alpha=0.0
+
+            # Linear interpolation for left and right arm
+            left_vec = [
+                left_goals[i][k] + alpha * (left_goals[i + 1][k] - left_goals[i][k])
+                for k in range(len(left_names))
+            ]
+            right_vec = [
+                right_goals[i][k] + alpha * (right_goals[i + 1][k] - right_goals[i][k])
+                for k in range(len(right_names))
+            ]
+
+            self.ros2.send_left_positions(left_vec)
+            self.ros2.send_right_positions(right_vec)
+
+            time.sleep(dt)
+
+        # Force-send the final point for precise positioning
+        self.ros2.send_left_positions(left_goals[-1])
+        self.ros2.send_right_positions(right_goals[-1])
+        logger.info("Calibration trajectory completed, robot at initial position.")

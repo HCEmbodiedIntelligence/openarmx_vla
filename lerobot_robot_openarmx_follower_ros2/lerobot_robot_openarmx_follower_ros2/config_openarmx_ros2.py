@@ -16,7 +16,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from lerobot.cameras import CameraConfig
-from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 from lerobot.cameras.configs import ColorMode, Cv2Rotation
 from lerobot.robots import RobotConfig
 
@@ -74,11 +73,22 @@ class OpenArmXRos2Config(RobotConfig):
     """LeRobot RobotConfig for OpenArmX via ROS 2 topics."""
 
     # Safety: clip per-joint relative steps (radians). If None, no clipping.
-    max_relative_target: float | dict[str, float] | None = None
+    max_relative_target: float | dict[str, float] | None = 0.523
 
     # Skip send_action (for direct teleop mode where teleop_node controls robot directly)
     # When True, lerobot only records data without sending commands to robot
     skip_send_action: bool = True
+
+    # Path to a demo YAML file containing a joint trajectory.
+    # When set, calibrate() loads the trajectory and slowly moves the robot to
+    # the initial position defined at the end of the trajectory.
+    init_pos_path: str | None = "/home/hc_op/openarmx_ws/init_pos.yaml"
+    # init_pos_path: str | None =None
+
+    return_pos_path: str | None = "/home/hc_op/openarmx_ws/return_pos.yaml"
+
+    # Speed scale for calibration trajectory execution (e.g. 0.2 = 5x slower).
+    calib_speed_scale: float = 0.7
 
     # cameras - 使用 ROS2 话题订阅相机 (支持跨设备网络传输)
     # 相机硬件连接在工控机上，通过 ROS2 DDS 发送图像到其他设备
@@ -89,7 +99,7 @@ class OpenArmXRos2Config(RobotConfig):
             "cam_right": Ros2CameraConfig(
                 image_topic="/cam_right/color/image",
                 depth_topic="/cam_right/depth/image",
-                fps=15,
+                fps=30,
                 width=424,
                 height=240,
                 color_mode=ColorMode.RGB,
@@ -101,7 +111,7 @@ class OpenArmXRos2Config(RobotConfig):
             "cam_left": Ros2CameraConfig(
                 image_topic="/cam_left/color/image",
                 depth_topic="/cam_left/depth/image",
-                fps=15,
+                fps=30,
                 width=424,
                 height=240,
                 color_mode=ColorMode.RGB,
@@ -113,7 +123,7 @@ class OpenArmXRos2Config(RobotConfig):
             "cam_head": Ros2CameraConfig(
                 image_topic="/cam_head/color/image",
                 depth_topic="/cam_head/depth/image",
-                fps=15,
+                fps=30,
                 width=424,
                 height=240,
                 color_mode=ColorMode.RGB,
