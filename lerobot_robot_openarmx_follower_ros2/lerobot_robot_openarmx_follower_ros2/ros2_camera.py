@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import abc
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -180,8 +181,12 @@ class Ros2Camera(Camera):
         if not rclpy.ok():
             rclpy.init()
 
-        # 创建节点
-        node_name = f"ros2_camera_{self.config.image_topic.replace('/', '_').strip('_')}"
+        # Normalize CLI-provided topic values and derive a valid ROS 2 node name.
+        # Some config parsers preserve whitespace around unquoted YAML values.
+        self.config.image_topic = re.sub(r"\s+", "", self.config.image_topic)
+        self.config.depth_topic = re.sub(r"\s+", "", self.config.depth_topic)
+        node_suffix = re.sub(r"[^A-Za-z0-9_]", "_", self.config.image_topic).strip("_")
+        node_name = f"ros2_camera_{node_suffix or 'image'}"
         self._node = Node(node_name)
 
         # 配置 QoS

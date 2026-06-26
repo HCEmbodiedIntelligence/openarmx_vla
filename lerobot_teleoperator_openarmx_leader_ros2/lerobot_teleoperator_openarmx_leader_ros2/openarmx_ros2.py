@@ -40,6 +40,9 @@ class OpenArmXRos2Teleop(Teleoperator):
         self.ros2 = OpenArmXRos2TeleopInterface(config.ros2)
 
         self._all_joint_names = self.config.ros2.left_joint_names + self.config.ros2.right_joint_names
+        self._gripper_binary_state: dict[str, bool | None] = {
+            joint: None for joint in self._all_joint_names if "finger_joint" in joint
+        }
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -105,7 +108,43 @@ class OpenArmXRos2Teleop(Teleoperator):
             action[f"{name}.pos"] = float(value)
         for name, value in zip(self.config.ros2.right_joint_names, right):
             action[f"{name}.pos"] = float(value)
+
+        if self.config.binary_gripper_actions:
+            self._encode_binary_gripper_actions(action)
         return action
+
+    def _encode_binary_gripper_actions(self, action: dict[str, float]) -> None:
+        """Replace physical gripper positions with semantic 0/1 states in-place."""
+        close_threshold = self.config.gripper_close_threshold
+        open_threshold = self.config.gripper_open_threshold
+        if close_threshold >= open_threshold:
+            raise ValueError(
+                "teleop gripper_close_threshold must be smaller than "
+                f"gripper_open_threshold (got {close_threshold} >= {open_threshold})."
+            )
+
+        midpoint = (close_threshold + open_threshold) / 2.0
+        for joint, previous_state in self._gripper_binary_state.items():
+            key = f"{joint}.pos"
+            raw = action[key]
+            state = previous_state
+            if state is None:
+                state = raw >= midpoint
+            elif state and raw <= close_threshold:
+                state = False
+            elif not state and raw >= open_threshold:
+                state = True
+
+            if state != previous_state:
+                logger.info(
+                    "Dataset gripper state: %s raw=%.5f -> %d (%s)",
+                    joint,
+                    raw,
+                    int(state),
+                    "open" if state else "closed/holding",
+                )
+            self._gripper_binary_state[joint] = state
+            action[key] = float(state)
 
     def send_feedback(self, feedback: dict[str, Any]) -> None:
         # No feedback channel implemented.

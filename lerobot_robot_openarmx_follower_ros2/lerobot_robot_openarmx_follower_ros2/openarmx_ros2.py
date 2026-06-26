@@ -78,6 +78,21 @@ class OpenArmXRos2(Robot):
         self._all_joint_names = self.config.ros2.left_joint_names + self.config.ros2.right_joint_names
 
         self._calibrated=False
+        # False = closed, True = open. None means that the first policy output
+        # will initialize the state.
+        self._gripper_binary_state: dict[str, bool | None] = {
+            joint: None for joint in self._all_joint_names if "finger_joint" in joint
+        }
+        self._gripper_pending_state: dict[str, bool | None] = {
+            joint: None for joint in self._gripper_binary_state
+        }
+        self._gripper_pending_count: dict[str, int] = {
+            joint: 0 for joint in self._gripper_binary_state
+        }
+        self._gripper_hold_until_step: dict[str, int] = {
+            joint: 0 for joint in self._gripper_binary_state
+        }
+        self._gripper_debug_step = 0
 
     @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
@@ -121,11 +136,128 @@ class OpenArmXRos2(Robot):
         return self._calibrated
 
     def calibrate(self) -> None:
-        self._replay_teach_action(self.config.init_pos_path, joint_thr=0.174)
+        self._replay_teach_action(self.config.init_pos_path, joint_thr=0.20)
         self._calibrated=True
 
     def configure(self) -> None:
         return  # handled externally
+
+    def reset(self) -> None:
+        """Move from the current pose to the last waypoint in init_pos.yaml."""
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        self.ros2.set_reset_active(True)
+        try:
+            # Allow the VR teleop node to observe the inhibit message before
+            # publishing the first reset command.
+            time.sleep(0.2)
+            goal = self._load_reset_goal_from_yaml(self.config.init_pos_path)
+            self._move_to_joint_goal(goal)
+        finally:
+            try:
+                self.ros2.set_reset_active(False)
+            except Exception:
+                logger.exception("Failed to release the teleop reset inhibit.")
+
+    def _load_reset_goal_from_yaml(self, yaml_path: str | None) -> dict[str, float]:
+        if yaml_path is None:
+            raise ValueError("Reset YAML path is not configured.")
+        if not os.path.isfile(yaml_path):
+            raise ValueError(f"Reset YAML not found: {yaml_path}")
+
+        with open(yaml_path, "r") as f:
+            data = yaml.safe_load(f)
+
+        yaml_joint_names: list[str] = data["joint_names"]
+        points: list[dict[str, Any]] = data["points"]
+        if not points:
+            raise ValueError(f"Reset YAML has no trajectory points: {yaml_path}")
+
+        final_positions = points[-1]["positions"]
+        if len(final_positions) != len(yaml_joint_names):
+            raise ValueError("Reset YAML final waypoint length does not match joint_names.")
+
+        pos_map = {yaml_joint_names[i]: float(final_positions[i]) for i in range(len(yaml_joint_names))}
+
+        missing = [j for j in self._all_joint_names if j not in pos_map]
+        if missing:
+            raise ValueError(f"Joints in config not found in reset YAML: {missing}")
+
+        return {j: pos_map[j] for j in self._all_joint_names}
+
+    def _move_to_joint_goal(
+        self,
+        goal: dict[str, float],
+        dt: float = 0.05,
+        max_step: float = 0.03,
+        goal_tolerance: float = 0.05,
+        timeout_s: float = 30.0,
+    ) -> None:
+        """Safely interpolate from the current pose to the target joint pose."""
+        start_t = time.time()
+        command = self.ros2.get_joint_positions(self._all_joint_names)
+        if command is None:
+            raise ValueError("Joint state is not available yet.")
+        missing = [j for j in self._all_joint_names if j not in command]
+        if missing:
+            raise ValueError(f"Missing joints in joint_states during reset: {missing}")
+        logger.info(
+            "Reset: moving robot to target pose with dt=%.3fs, max_step=%.3frad, tolerance=%.3frad",
+            dt,
+            max_step,
+            goal_tolerance,
+        )
+
+        while True:
+            present = self.ros2.get_joint_positions(self._all_joint_names)
+            if present is None:
+                raise ValueError("Joint state is not available yet.")
+
+            missing = [j for j in self._all_joint_names if j not in present]
+            if missing:
+                raise ValueError(f"Missing joints in joint_states during reset: {missing}")
+
+            next_goal: dict[str, float] = {}
+            max_error = 0.0
+            for joint in self._all_joint_names:
+                error = goal[joint] - present[joint]
+                max_error = max(max_error, abs(error))
+                command_error = goal[joint] - command[joint]
+                if abs(command_error) <= max_step:
+                    next_goal[joint] = goal[joint]
+                else:
+                    next_goal[joint] = command[joint] + max_step * (1.0 if command_error > 0.0 else -1.0)
+
+            if max_error <= goal_tolerance:
+                break
+
+            left_vec = [next_goal[j] for j in self.config.ros2.left_joint_names]
+            right_vec = [next_goal[j] for j in self.config.ros2.right_joint_names]
+            self.ros2.send_left_positions(left_vec)
+            self.ros2.send_right_positions(right_vec)
+            command = next_goal
+
+            if time.time() - start_t > timeout_s:
+                errors = sorted(
+                    ((j, abs(goal[j] - present[j])) for j in self._all_joint_names),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )
+                unresolved = ", ".join(
+                    f"{name}={error:.4f}rad" for name, error in errors if error > goal_tolerance
+                )
+                raise TimeoutError(
+                    f"Reset timed out after {timeout_s:.1f}s; unresolved joints: {unresolved}"
+                )
+
+            time.sleep(dt)
+
+        left_vec = [goal[j] for j in self.config.ros2.left_joint_names]
+        right_vec = [goal[j] for j in self.config.ros2.right_joint_names]
+        self.ros2.send_left_positions(left_vec)
+        self.ros2.send_right_positions(right_vec)
+        logger.info("Reset: robot reached target pose from init_pos.yaml final waypoint.")
 
 
     def get_observation(self) -> dict[str, Any]:
@@ -160,6 +292,9 @@ class OpenArmXRos2(Robot):
         # Build per-joint goals
         goal = {k.removesuffix(".pos"): float(v) for k, v in action.items() if k.endswith(".pos")}
 
+        if self.config.binary_gripper:
+            goal = self._classify_gripper_goals(goal)
+
         # Skip sending if configured (direct teleop mode - teleop_node controls robot)
         if self.config.skip_send_action:
             return {f"{j}.pos": goal[j] for j in self._all_joint_names}
@@ -181,15 +316,133 @@ class OpenArmXRos2(Robot):
 
         return {f"{j}.pos": goal[j] for j in self._all_joint_names}
 
+    def _classify_gripper_goals(self, goal: dict[str, float]) -> dict[str, float]:
+        """Map continuous policy gripper outputs to stable closed/open commands."""
+        close_threshold = self.config.gripper_close_threshold
+        open_threshold = self.config.gripper_open_threshold
+        if close_threshold >= open_threshold:
+            raise ValueError(
+                "gripper_close_threshold must be smaller than gripper_open_threshold "
+                f"(got {close_threshold} >= {open_threshold})."
+            )
+        confirm_frames = self.config.gripper_confirm_frames
+        if confirm_frames < 1:
+            raise ValueError(f"gripper_confirm_frames must be >= 1 (got {confirm_frames}).")
+        debug_every = self.config.gripper_debug_log_every
+        if debug_every < 0:
+            raise ValueError(f"gripper_debug_log_every must be >= 0 (got {debug_every}).")
+        min_open_frames = self.config.gripper_min_open_frames
+        min_closed_frames = self.config.gripper_min_closed_frames
+        if min_open_frames < 0 or min_closed_frames < 0:
+            raise ValueError(
+                "gripper_min_open_frames and gripper_min_closed_frames must be >= 0 "
+                f"(got {min_open_frames}, {min_closed_frames})."
+            )
+        self._gripper_debug_step += 1
+
+        midpoint = (close_threshold + open_threshold) / 2.0
+        classified = dict(goal)
+        for joint, previous_state in self._gripper_binary_state.items():
+            raw = goal[joint]
+            state = previous_state
+            if state is None:
+                state = raw >= midpoint
+                self._gripper_pending_state[joint] = None
+                self._gripper_pending_count[joint] = 0
+                hold_frames = min_open_frames if state else min_closed_frames
+                self._gripper_hold_until_step[joint] = self._gripper_debug_step + hold_frames
+            else:
+                desired_state = state
+                hold_active = self._gripper_debug_step < self._gripper_hold_until_step[joint]
+                if not hold_active:
+                    if state and raw <= close_threshold:
+                        desired_state = False
+                    elif not state and raw >= open_threshold:
+                        desired_state = True
+
+                if desired_state != state:
+                    if self._gripper_pending_state[joint] == desired_state:
+                        self._gripper_pending_count[joint] += 1
+                    else:
+                        self._gripper_pending_state[joint] = desired_state
+                        self._gripper_pending_count[joint] = 1
+
+                    if self._gripper_pending_count[joint] >= confirm_frames:
+                        state = desired_state
+                        hold_frames = min_open_frames if state else min_closed_frames
+                        self._gripper_hold_until_step[joint] = self._gripper_debug_step + hold_frames
+                        self._gripper_pending_state[joint] = None
+                        self._gripper_pending_count[joint] = 0
+                else:
+                    self._gripper_pending_state[joint] = None
+                    self._gripper_pending_count[joint] = 0
+
+            if state != previous_state:
+                logger.info(
+                    "Binary gripper: %s raw=%.5f -> state=%d (%s)",
+                    joint,
+                    raw,
+                    int(state),
+                    "open" if state else "closed",
+                )
+            elif debug_every and self._gripper_debug_step % debug_every == 0:
+                pending_state = self._gripper_pending_state[joint]
+                hold_remaining = max(0, self._gripper_hold_until_step[joint] - self._gripper_debug_step)
+                logger.info(
+                    "Binary gripper debug: step=%d %s raw=%.5f state=%d pending=%s/%d "
+                    "hold=%d thr_close=%.5f thr_open=%.5f",
+                    self._gripper_debug_step,
+                    joint,
+                    raw,
+                    int(state),
+                    (
+                        "open"
+                        if pending_state is True
+                        else "closed"
+                        if pending_state is False
+                        else "none"
+                    ),
+                    self._gripper_pending_count[joint],
+                    hold_remaining,
+                    close_threshold,
+                    open_threshold,
+                )
+            self._gripper_binary_state[joint] = state
+            classified[joint] = (
+                self.config.gripper_open_position
+                if state
+                else self.config.gripper_closed_position
+            )
+
+        return classified
+
     def disconnect(self) -> None:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
-        
-        self._replay_teach_action(self.config.return_pos_path, joint_thr=0.348)
-        for cam in self.cameras.values():
-            cam.disconnect()
-        self.ros2.disconnect()
-        self._calibrated=False
+
+        try:
+            self.ros2.set_reset_active(True)
+            time.sleep(0.2)
+            # LeRobot skips the inter-episode reset after the final episode.
+            # Move to the start of return_pos.yaml before replaying it home.
+            reset_goal = self._load_reset_goal_from_yaml(self.config.init_pos_path)
+            self._move_to_joint_goal(reset_goal)
+            self._replay_teach_action(self.config.return_pos_path, joint_thr=0.348)
+        except Exception:
+            logger.exception("Return trajectory failed; disconnecting devices anyway.")
+        finally:
+            try:
+                self.ros2.set_reset_active(False)
+                time.sleep(0.1)
+            except Exception:
+                logger.exception("Failed to release the teleop reset inhibit.")
+            for cam in self.cameras.values():
+                try:
+                    cam.disconnect()
+                except Exception:
+                    logger.exception("Failed to disconnect camera during robot shutdown.")
+            self.ros2.disconnect()
+            self._calibrated = False
 
     def _replay_teach_action(self,yaml_path,joint_thr=None):
         """Load demo.yaml trajectory and slowly move robot to the initial position.

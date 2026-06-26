@@ -39,6 +39,7 @@ class OpenArmXRos2InterfaceConfig:
 
     left_command_topic: str = "/left_forward_position_controller/commands"
     right_command_topic: str = "/right_forward_position_controller/commands"
+    reset_active_topic: str = "/openarmx/reset_active"
 
     # Joint ordering for commands (must match controller 'joints:' order)
     left_joint_names: list[str] = field(
@@ -78,6 +79,25 @@ class OpenArmXRos2Config(RobotConfig):
     # Skip send_action (for direct teleop mode where teleop_node controls robot directly)
     # When True, lerobot only records data without sending commands to robot
     skip_send_action: bool = True
+
+    # Convert the policy's continuous gripper prediction into a binary state.
+    # The classifier uses hysteresis, then maps state 0/1 to the physical
+    # prismatic-joint commands below.  Do not send 1.0 directly to the joint.
+    binary_gripper: bool = False
+    gripper_closed_position: float = 0.0
+    gripper_open_position: float = 0.04
+    gripper_close_threshold: float = 0.015
+    gripper_open_threshold: float = 0.032
+    # Require this many consecutive predictions beyond a threshold before
+    # changing state. This filters short policy spikes at control-loop rate.
+    gripper_confirm_frames: int = 5
+    # Minimum duration to hold a binary gripper state after a transition.
+    # This turns short policy pulses into executable gripper commands.
+    gripper_min_open_frames: int = 0
+    gripper_min_closed_frames: int = 0
+    # Debug: print raw gripper policy outputs every N send_action calls.
+    # 0 disables continuous debug logging; state changes are still logged.
+    gripper_debug_log_every: int = 0
 
     # Path to a demo YAML file containing a joint trajectory.
     # When set, calibrate() loads the trajectory and slowly moves the robot to

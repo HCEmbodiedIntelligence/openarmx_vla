@@ -21,7 +21,7 @@ import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Bool, Float64MultiArray
 
 from lerobot.utils.errors import DeviceNotConnectedError
 
@@ -48,6 +48,7 @@ class OpenArmXRos2Interface:
 
         self._left_pub = None
         self._right_pub = None
+        self._reset_active_pub = None
         self._joint_state_sub = None
 
         self._lock = threading.Lock()
@@ -65,6 +66,7 @@ class OpenArmXRos2Interface:
 
         self._left_pub = self._node.create_publisher(Float64MultiArray, self.config.left_command_topic, 10)
         self._right_pub = self._node.create_publisher(Float64MultiArray, self.config.right_command_topic, 10)
+        self._reset_active_pub = self._node.create_publisher(Bool, self.config.reset_active_topic, 10)
 
         self._joint_state_sub = self._node.create_subscription(
             JointState, self.config.joint_states_topic, self._joint_state_cb, 50
@@ -93,6 +95,9 @@ class OpenArmXRos2Interface:
         if self._right_pub is not None:
             self._right_pub.destroy()
             self._right_pub = None
+        if self._reset_active_pub is not None:
+            self._reset_active_pub.destroy()
+            self._reset_active_pub = None
 
         if self._node is not None:
             self._node.destroy_node()
@@ -141,3 +146,10 @@ class OpenArmXRos2Interface:
         msg = Float64MultiArray()
         msg.data = [float(x) for x in positions]
         self._right_pub.publish(msg)
+
+    def set_reset_active(self, active: bool) -> None:
+        if not self.is_connected or self._node is None or self._reset_active_pub is None:
+            raise DeviceNotConnectedError("OpenArmXRos2Interface not connected")
+        msg = Bool()
+        msg.data = bool(active)
+        self._reset_active_pub.publish(msg)

@@ -60,4 +60,11 @@ class OpenArmXRos2TeleopInterfaceConfig:
 class OpenArmXRos2TeleopConfig(TeleoperatorConfig):
     """LeRobot TeleoperatorConfig for OpenArmX via ROS 2 VR command topics."""
 
+    # Store gripper actions as semantic states in the dataset:
+    # 0.0 = closed/holding, 1.0 = open.  Hysteresis prevents a partially open
+    # gripper (for example while holding an object) from flipping state.
+    binary_gripper_actions: bool = False
+    gripper_close_threshold: float = 0.015
+    gripper_open_threshold: float = 0.025
+
     ros2: OpenArmXRos2TeleopInterfaceConfig = field(default_factory=OpenArmXRos2TeleopInterfaceConfig)
