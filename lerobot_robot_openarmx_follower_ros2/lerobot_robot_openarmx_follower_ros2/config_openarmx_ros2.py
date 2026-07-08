@@ -108,7 +108,7 @@ class OpenArmXRos2Config(RobotConfig):
     return_pos_path: str | None = "/home/hc_op/openarmx_ws/return_pos.yaml"
 
     # Speed scale for calibration trajectory execution (e.g. 0.2 = 5x slower).
-    calib_speed_scale: float = 0.7
+    calib_speed_scale: float = 1
 
     # cameras - 使用 ROS2 话题订阅相机 (支持跨设备网络传输)
     # 相机硬件连接在工控机上，通过 ROS2 DDS 发送图像到其他设备

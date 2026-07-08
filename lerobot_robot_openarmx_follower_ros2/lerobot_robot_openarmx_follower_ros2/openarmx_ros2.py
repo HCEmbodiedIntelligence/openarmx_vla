@@ -12,6 +12,7 @@
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 
 from __future__ import annotations
+from contextlib import contextmanager
 
 import bisect
 import logging
